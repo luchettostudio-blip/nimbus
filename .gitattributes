@@ -1,0 +1,13 @@
+# Fine riga LF ovunque (Windows e macOS), così i diff restano puliti.
+* text=auto eol=lf
+
+# File binari: mai convertiti.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

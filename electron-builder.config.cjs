@@ -19,6 +19,13 @@ module.exports = {
     icon: `brand/${brand.icon}`,
     executableName: brand.name
   },
+  // macOS (non ancora provato: vedi CLAUDE.md, "Spostarsi su Mac"). L'icona .icns viene
+  // generata da electron-builder a partire dal PNG 512×512.
+  mac: {
+    target: [{ target: 'dmg', arch: ['arm64', 'x64'] }],
+    icon: `brand/${brand.iconPng}`,
+    category: 'public.app-category.productivity'
+  },
   nsis: {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
