@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useStore } from '../store'
+import { isSplitInbox, useStore } from '../store'
 
 /**
  * Scorciatoie globali (stile Superhuman / Gmail):
@@ -25,6 +25,14 @@ export function useHotkeys(): void {
         return
       }
 
+      // Ctrl+F: ricerca (anche se il focus è in un campo, tranne il compositore).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !s.compose && !s.settingsOpen && !s.showOnboarding) {
+        e.preventDefault()
+        s.setPalette(false)
+        s.openSearch()
+        return
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
         e.preventDefault()
         s.openSettings()
@@ -42,7 +50,7 @@ export function useHotkeys(): void {
       // Con un modale aperto o il focus in un campo, i tasti singoli non fanno nulla.
       const target = e.target as HTMLElement
       const typing = target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
-      if (typing || s.paletteOpen || s.compose || s.showOnboarding || s.settingsOpen) return
+      if (typing || s.paletteOpen || s.compose || s.showOnboarding || s.settingsOpen || s.unsubDialog) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
 
       if (gPending) {
@@ -73,9 +81,13 @@ export function useHotkeys(): void {
         c: () => s.openCompose('new'),
         u: () => void s.toggleSeen(),
         s: () => void s.toggleFlagged(),
+        // Schede della Posta in arrivo divisa
+        '1': () => isSplitInbox(s) && s.setInboxTab('people'),
+        '2': () => isSplitInbox(s) && s.setInboxTab('newsletter'),
+        '3': () => isSplitInbox(s) && s.setInboxTab('notifications'),
         h: () => s.setSnoozeMenu(true),
-        '/': () => s.setPalette(true),
-        Escape: () => (s.searchResults ? void s.search('') : void s.selectMessage(null)),
+        '/': () => s.openSearch(),
+        Escape: () => (s.searchOpen ? s.closeSearch() : void s.selectMessage(null)),
         g: () => {
           gPending = true
           if (gTimer) clearTimeout(gTimer)

@@ -10,6 +10,8 @@ import type {
   AppSettings,
   DraftMessage,
   Folder,
+  InboxCategory,
+  IndexStatus,
   MessageBody,
   MessageSummary,
   NewAccountInput,
@@ -20,8 +22,11 @@ import type {
   SignaturePrefs,
   SignatureView,
   SnoozeItem,
-  SyncEvent
+  Subscription,
+  SyncEvent,
+  Unsubscription
 } from '../core/models'
+import type { UnsubscribePlan } from '../core/features/unsubscribe/listUnsubscribe'
 
 export type ThemeMode = 'system' | 'dark' | 'light'
 
@@ -36,12 +41,27 @@ export interface IpcInvokeMap {
   'folders:refresh': { args: [accountId: string]; ret: void }
   'folders:inboxes': { args: []; ret: Folder[] }
 
-  'messages:list': { args: [accountId: string, folder: string]; ret: MessageSummary[] }
+  /** `category`: scheda della Posta in arrivo divisa (null = tutte). */
+  'messages:list': { args: [accountId: string, folder: string, category?: InboxCategory | null]; ret: MessageSummary[] }
   'messages:sync': { args: [accountId: string, folder: string]; ret: void }
   'messages:loadOlder': { args: [accountId: string, folder: string]; ret: number }
-  /** accountId null = cerca in tutti gli account. */
-  'messages:search': { args: [accountId: string | null, query: string]; ret: MessageSummary[] }
-  'messages:unified': { args: []; ret: MessageSummary[] }
+  /** Ricerca full-text con operatori (da:, a:, oggetto:, ha:, prima:, dopo:, in:, non:letto…). */
+  'messages:search': { args: [query: string]; ret: MessageSummary[] }
+  /** IMAP SEARCH sul server; ritorna quante mail nuove sono state scaricate e indicizzate. */
+  'search:server': { args: [query: string]; ret: number }
+  'search:status': { args: []; ret: IndexStatus }
+  'search:reindex': { args: []; ret: void }
+  'messages:unified': { args: [category?: InboxCategory | null]; ret: MessageSummary[] }
+  'inbox:counts': { args: [accountId: string | null]; ret: Record<InboxCategory, number> }
+  'unsub:plan': { args: [accountId: string, address: string]; ret: UnsubscribePlan | null }
+  'unsub:run': { args: [accountId: string, address: string, archiveAll: boolean]; ret: { method: UnsubscribePlan['method']; target: string } }
+  'unsub:list': { args: []; ret: Unsubscription[] }
+  'unsub:subscriptions': { args: [accountId: string | null]; ret: Subscription[] }
+  'unsub:block': { args: [accountId: string, address: string]; ret: void }
+  'unsub:unblock': { args: [accountId: string, address: string]; ret: void }
+  /** Sposta il mittente in un'altra scheda; ritorna quante mail ha riclassificato. */
+  'inbox:moveSender': { args: [accountId: string, address: string, category: InboxCategory]; ret: number }
+  'threads:get': { args: [accountId: string, threadId: string]; ret: MessageSummary[] }
   'messages:syncUnified': { args: []; ret: void }
   'messages:body': { args: [accountId: string, folder: string, uid: number]; ret: MessageBody }
   'messages:setSeen': { args: [accountId: string, folder: string, uids: number[], seen: boolean]; ret: void }
@@ -94,6 +114,18 @@ export type InvokeChannel = keyof IpcInvokeMap
 export const INVOKE_CHANNELS: InvokeChannel[] = [
   'settings:get',
   'settings:update',
+  'inbox:counts',
+  'inbox:moveSender',
+  'unsub:plan',
+  'unsub:run',
+  'unsub:list',
+  'unsub:subscriptions',
+  'unsub:block',
+  'unsub:unblock',
+  'threads:get',
+  'search:server',
+  'search:status',
+  'search:reindex',
   'snooze:set',
   'snooze:cancel',
   'attachments:get',

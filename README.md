@@ -129,17 +129,69 @@ Outlook.com sta dismettendo l'accesso IMAP con password: se fallisce, serve OAut
 | `C` | Scrivi nuovo messaggio |
 | `U` | Letto / non letto |
 | `S` | Speciale (stella) |
-| `/` | Cerca (in tutti gli account) |
+| `/` o `Ctrl` `F` | Ricerca istantanea (in tutti gli account) |
+| `H` | Rimanda (snooze) |
+| `1` · `2` · `3` | Schede Persone · Newsletter · Notifiche |
 | `G` `A` · `G` `I` · `G` `S` | Inbox unificata · Posta in arrivo · Inviata |
-| `Ctrl` `Enter` | Invia (nel composer) |
+| `Ctrl` `,` | Impostazioni |
+| `Ctrl` `Enter` | Invia (nel composer e nella risposta rapida) |
+| `←` `→` · `+` `−` | Nell'anteprima allegati: precedente/successivo · zoom |
 | `Esc` | Chiudi / deseleziona |
+
+## Funzioni
+
+### 1. Firme
+Impostazioni (`Ctrl+,`) → **Firme**: più firme per account, una predefinita per le nuove mail e una per risposte/inoltri.
+Editor visuale (grassetto, corsivo, link, colore, dimensione, immagine) oppure **HTML** per incollare una firma esistente:
+stili convertiti in inline, layout a tabelle, script e CSS esterno rimossi. Le immagini (anche quelle remote della firma
+incollata) diventano allegati **CID**, ridotte a 300px e compresse. Anteprima chiaro/scuro. Nel compositore la firma si
+inserisce da sola sopra il testo citato e si cambia dal menu accanto a "da".
+
+### 2. Annulla invio e invio programmato
+Dopo **Invia** la mail parte dopo 5/10/20/30 secondi (Impostazioni → Generali): **Annulla** riapre il compositore intatto.
+La freccia accanto a Invia → **Programma invio** (domani 8:00, domani 14:00, lunedì 8:00, data e ora). Vista
+**In programma** per modificarli, inviarli subito o annullarli. Partono anche a finestra chiusa (Nimbus resta nella tray);
+se il PC era spento all'orario, al riavvio Nimbus chiede se inviarli ora. Dopo ogni invio una copia va in Posta inviata
+con IMAP APPEND (tranne Gmail e Outlook, che lo fanno da soli).
+
+### 3. Rimanda (snooze)
+Pulsante sveglia o `H`: più tardi oggi, stasera, domani mattina, lunedì, data e ora. La mail va nella cartella IMAP
+`Nimbus/Rimandate` (creata se manca) e all'orario torna in cima alla Posta in arrivo, non letta, con etichetta
+"Rimandata" e notifica. Vista **Rimandate** con l'orario di risveglio e "Annulla".
+
+### 4. Anteprima allegati
+Miniature delle immagini nella vista messaggio. Clic su un allegato: anteprima a tutto schermo (PDF con zoom e ricerca,
+immagini con zoom/trascinamento, testo e JSON in monospace, altri formati con "Apri" e "Salva"). Cache locale su disco.
+I file eseguibili non si aprono mai direttamente.
+
+### 5. Ricerca istantanea
+`/` o `Ctrl+F`. Risultati mentre scrivi, parole evidenziate. Operatori: `da:` `a:` `oggetto:` `ha:allegato` `ha:pdf`
+`prima:2026-11-01` `dopo:` `in:inviata` `non:letto` `è:speciale` `account:` e `"frasi esatte"`. Chip Da/Allegati/Data/
+Cartella/Account. In background Nimbus indicizza le mail degli ultimi 12 mesi (impostabile); per il resto
+**Cerca anche sul server**. Funziona anche dentro `Ctrl+K`.
+
+### 6. Conversazioni
+Mail raggruppate con Message-ID / In-Reply-To / References (oggetto normalizzato solo se mancano gli header), comprese le
+tue risposte da Posta inviata. Vista chat: tu a destra, gli altri a sinistra; messaggi letti compressi, citazioni e firme
+ripetute dietro "···", **risposta rapida** in fondo. Disattivabile in Impostazioni.
+
+### 7. Inbox divisa
+Schede **Persone / Newsletter / Notifiche** (`1` `2` `3`) con le non lette. Classificazione locale; chi hai scritto tu va
+sempre in Persone. Clic destro o trascinamento su una scheda per spostare un mittente: Nimbus lo ricorda.
+Notifiche di Windows solo per Persone (impostabile). Disattivabile.
+
+### 8. Disiscrizione
+Su ogni mail con List-Unsubscribe: pulsante **Disiscriviti** (e nel clic destro). Nimbus usa, nell'ordine: POST One-Click
+(RFC 8058) senza aprire nulla, mail di disiscrizione dall'account giusto, o il link nel browser. Opzione per archiviare
+tutte le mail del mittente. Impostazioni → **Disiscrizioni**: storico; chi scrive ancora dopo 7 giorni può essere
+**bloccato** (le sue mail vanno nel Cestino). Scheda Newsletter → **Gestisci iscrizioni**: mittenti e mail al mese.
 
 ## Struttura
 
 ```
 brand/          identità visiva: brand.json (nome, appId, colori), logo, icone
 src/
-├─ core/        logica email portabile (IMAP, SMTP, SQLite, sync, errori) — vedi src/core/README.md
+├─ core/        logica email portabile (IMAP, SMTP, SQLite, sync, funzioni) — vedi src/core/README.md
 ├─ shared/      contratto IPC tipizzato fra main e renderer
 ├─ main/        finestra Mica, IPC, safeStorage, notifiche, config/providers.ts
 ├─ preload/     ponte sicuro (contextBridge) con canali in whitelist
@@ -159,4 +211,5 @@ src/
 
 ## Dati locali
 
-Tutto in `%APPDATA%\Nimbus\`: `mail.db` (cache SQLite) e `credentials.json` (password cifrate).
+Tutto in `%APPDATA%\Nimbus\`: `mail.db` (cache SQLite, firme, invii programmati, rimandate, indice di ricerca),
+`credentials.json` (password cifrate) e `attachments\` (cache degli allegati aperti).

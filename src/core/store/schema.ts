@@ -190,5 +190,10 @@ export const MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL,
     PRIMARY KEY (account_id, address)
   );
+  `,
+
+  // v3 — nome del mittente salvato con la disiscrizione (le sue mail possono essere archiviate)
+  `
+  ALTER TABLE unsubscriptions ADD COLUMN name TEXT;
   `
 ]

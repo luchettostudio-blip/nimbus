@@ -21,7 +21,7 @@
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { ImapService } from '../imap/ImapService'
+import { htmlToText, ImapService } from '../imap/ImapService'
 import { SmtpService } from '../smtp/SmtpService'
 import type { MailStore } from '../store/MailStore'
 import { MailSetupError } from '../errors'
@@ -30,7 +30,13 @@ import { SignatureStore, type ImageProcessor } from '../features/signatures/Sign
 import { Outbox } from '../features/outbox/Outbox'
 import { Snoozer } from '../features/snooze/Snoozer'
 import { AttachmentCache, type CachedAttachment } from '../features/attachments/AttachmentCache'
-import type { Account, DraftMessage, Folder, MessageBody, MessageSummary, NewAccountInput, OutgoingMessage, SyncEvent } from '../models'
+import { SearchService } from '../features/search/SearchService'
+import { Threader } from '../features/threads/Threader'
+import { Threads } from '../features/threads/Threads'
+import { Classifier } from '../features/classify/Classifier'
+import { Unsubscriber } from '../features/unsubscribe/Unsubscriber'
+import { messageFromRow } from '../store/MailStore'
+import type { Account, DraftMessage, Folder, InboxCategory, MessageBody, MessageSummary, NewAccountInput, OutgoingMessage, SyncEvent } from '../models'
 
 /** Astrazione (asincrona) del portachiavi: in Electron safeStorage/DPAPI, in Swift il Keychain. */
 export interface CredentialStore {
@@ -74,6 +80,10 @@ export interface PlatformServices {
   images: ImageProcessor
   /** Cartella dati dell'app (cache allegati, ecc.). */
   dataDir: string
+  /** POST One-Click di disiscrizione (RFC 8058). Ritorna lo status HTTP. */
+  postOneClick?(url: string): Promise<number>
+  /** Apre un link nel browser predefinito. */
+  openExternal?(url: string): Promise<void>
 }
 
 export class SyncEngine extends EventEmitter {
@@ -84,6 +94,12 @@ export class SyncEngine extends EventEmitter {
   readonly outbox: Outbox
   readonly snoozer: Snoozer
   readonly attachments: AttachmentCache
+  readonly search: SearchService
+  readonly threader: Threader
+  readonly threads: Threads
+  readonly classifier: Classifier
+  readonly unsubscriber: Unsubscriber
+  private unsubTimer: NodeJS.Timeout | null = null
 
   constructor(
     private readonly store: MailStore,
@@ -93,6 +109,38 @@ export class SyncEngine extends EventEmitter {
     super()
     this.signatures = new SignatureStore(store.raw, platform.images)
     this.attachments = new AttachmentCache(store.raw, join(platform.dataDir, 'attachments'))
+    this.threader = new Threader(store.raw)
+    this.threads = new Threads(store.raw, () => this.store.listAccounts())
+    this.classifier = new Classifier(store.raw, () => this.store.listAccounts(), (id) => this.store.findFolderByRole(id, 'sent')?.path)
+    this.unsubscriber = new Unsubscriber(store, {
+      post: (url) => (platform.postOneClick ? platform.postOneClick(url) : Promise.reject(new Error('POST non disponibile'))),
+      openExternal: (url) => (platform.openExternal ? platform.openExternal(url) : Promise.resolve()),
+      send: (msg) => this.send(msg),
+      archive: (id, folder, uids) => this.archive(id, folder, uids),
+      trash: (id, folder, uids) => this.trash(id, folder, uids),
+      emit: (e) => this.emitEvent(e)
+    })
+    // Ogni mail salvata (sync, ricerca, snooze…) viene subito agganciata alla sua
+    // conversazione, classificata per l'inbox divisa e, se il mittente è bloccato,
+    // spostata nel Cestino.
+    store.onUpsert((list) => {
+      this.threader.assign(list)
+      this.classifier.apply(list)
+      this.trashBlocked(list)
+    })
+    this.threader.backfill()
+    this.classifier.backfill(
+      (store.raw.prepare('SELECT * FROM messages WHERE category IS NULL').all() as unknown[]).map(messageFromRow)
+    )
+    this.search = new SearchService(store, {
+      accounts: () => this.store.listAccounts(),
+      imapFor: (id) => {
+        const s = this.sessions.get(id)
+        return s?.imap.isConnected ? s.imap : null
+      },
+      indexMonths: () => this.store.getSettings().indexMonths,
+      emit: (e) => this.emitEvent(e)
+    })
     this.outbox = new Outbox(store.raw, { send: (d) => this.sendDraft(d), emit: (e) => this.emitEvent(e) })
     this.snoozer = new Snoozer(store, {
       imapFor: (id) => {
@@ -168,11 +216,35 @@ export class SyncEngine extends EventEmitter {
     await Promise.all(this.store.listAccounts().map((a) => this.startAccount(a)))
     this.outbox.start()
     this.snoozer.start()
+    this.search.schedule()
+    // Chi scrive ancora 7 giorni dopo la disiscrizione: proposta di blocco.
+    this.unsubscriber.checkStillSending()
+    if (this.unsubTimer) clearInterval(this.unsubTimer)
+    this.unsubTimer = setInterval(() => this.unsubscriber.checkStillSending(), 60 * 60 * 1000)
+  }
+
+  /** Mittenti bloccati: le loro nuove mail in Posta in arrivo vanno nel Cestino. */
+  private trashBlocked(list: MessageSummary[]): void {
+    const byFolder = new Map<string, { accountId: string; folder: string; uids: number[] }>()
+    for (const m of list) {
+      if (!m.from?.address || !this.unsubscriber.isBlocked(m.accountId, m.from.address)) continue
+      if (this.store.findFolderByRole(m.accountId, 'inbox')?.path !== m.folder) continue
+      const k = `${m.accountId}|${m.folder}`
+      const e = byFolder.get(k) ?? { accountId: m.accountId, folder: m.folder, uids: [] }
+      e.uids.push(m.uid)
+      byFolder.set(k, e)
+    }
+    for (const e of byFolder.values()) {
+      // Dopo l'upsert in corso, non dentro la transazione.
+      setTimeout(() => void this.trash(e.accountId, e.folder, e.uids).catch(() => {}), 0)
+    }
   }
 
   async stopAll(): Promise<void> {
     this.outbox.stop()
     this.snoozer.stop()
+    this.search.stop()
+    if (this.unsubTimer) clearInterval(this.unsubTimer)
     await Promise.all([...this.sessions.keys()].map((id) => this.stopAccount(id)))
   }
 
@@ -216,6 +288,9 @@ export class SyncEngine extends EventEmitter {
           () => this.handleDisconnect(s)
         )
       }
+      // Le mie risposte (Inviata) servono alle conversazioni e a "chi ho scritto io".
+      const sent = this.store.findFolderByRole(id, 'sent')
+      if (sent) void this.syncFolder(id, sent.path, false).catch(() => {})
 
       if (s.pollTimer) clearInterval(s.pollTimer)
       s.pollTimer = setInterval(() => void this.poll(s), POLL_INTERVAL_MS)
@@ -246,6 +321,8 @@ export class SyncEngine extends EventEmitter {
       await this.refreshFolders(s.account.id)
       const inbox = this.store.findFolderByRole(s.account.id, 'inbox')
       if (inbox) await this.syncFolder(s.account.id, inbox.path, true)
+      const sent = this.store.findFolderByRole(s.account.id, 'sent')
+      if (sent) await this.syncFolder(s.account.id, sent.path, false)
     } catch {
       /* il prossimo giro riproverà */
     }
@@ -275,17 +352,52 @@ export class SyncEngine extends EventEmitter {
     return this.store.listFolders(accountId)
   }
 
-  listMessages(accountId: string, folder: string): MessageSummary[] {
-    return this.store.listMessages(accountId, folder, 5000)
+  /**
+   * Lista della cartella; con i thread attivi una riga per conversazione.
+   * `category` filtra la Posta in arrivo per scheda (Persone / Newsletter / Notifiche).
+   */
+  listMessages(accountId: string, folder: string, category?: InboxCategory | null): MessageSummary[] {
+    let list = this.store.listMessages(accountId, folder, 5000)
+    if (category && this.store.getSettings().splitInbox) list = list.filter((m) => (m.category ?? 'people') === category)
+    return this.store.getSettings().threads ? this.threads.collapse(list) : list
   }
 
-  search(accountId: string | null, query: string): MessageSummary[] {
-    return this.store.searchMessages(accountId, query)
+  /** Non lette per scheda nelle Posta in arrivo (di un account o di tutti). */
+  inboxCounts(accountId: string | null): Record<InboxCategory, number> {
+    const rows = this.store.raw
+      .prepare(
+        `SELECT coalesce(m.category, 'people') AS c, count(*) AS n FROM messages m
+         JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder
+         WHERE f.role = 'inbox' AND m.seen = 0 AND (? IS NULL OR m.account_id = ?) GROUP BY c`
+      )
+      .all(accountId, accountId) as { c: InboxCategory; n: number }[]
+    const out: Record<InboxCategory, number> = { people: 0, newsletter: 0, notifications: 0 }
+    for (const r of rows) out[r.c] = r.n
+    return out
+  }
+
+  /** Sposta un mittente in un'altra scheda (e lo ricorda). */
+  moveSender(accountId: string, address: string, category: InboxCategory): number {
+    const n = this.classifier.learn(accountId, address, category)
+    this.emitEvent({ type: 'messages', accountId, folder: this.store.findFolderByRole(accountId, 'inbox')?.path ?? 'INBOX' })
+    return n
+  }
+
+  /** Conversazione completa (tutte le cartelle, comprese le mie risposte in Inviata). */
+  getThread(accountId: string, threadId: string): MessageSummary[] {
+    return this.threads.get(accountId, threadId)
+  }
+
+  /** Ricerca full-text con operatori (vedi features/search/query.ts). */
+  searchMessages(query: string): MessageSummary[] {
+    return this.search.query(query)
   }
 
   /** Inbox unificata: le Posta in arrivo di tutti gli account, per data. */
-  listUnifiedInbox(): MessageSummary[] {
-    return this.store.listUnifiedInbox(2000)
+  listUnifiedInbox(category?: InboxCategory | null): MessageSummary[] {
+    let list = this.store.listUnifiedInbox(2000)
+    if (category && this.store.getSettings().splitInbox) list = list.filter((m) => (m.category ?? 'people') === category)
+    return this.store.getSettings().threads ? this.threads.collapse(list) : list
   }
 
   /** La cartella Posta in arrivo di ogni account (per i contatori della sidebar). */
@@ -354,7 +466,9 @@ export class SyncEngine extends EventEmitter {
       this.emitEvent({ type: 'messages', accountId, folder: path })
       this.emitEvent({ type: 'folders', accountId })
 
-      const unseenNew = fresh.filter((m) => !m.seen && !(m.messageId && this.quietMessageIds.has(m.messageId)))
+      const unseenNew = fresh.filter(
+        (m) => !m.seen && !(m.messageId && this.quietMessageIds.has(m.messageId)) && !(m.from && this.unsubscriber.isBlocked(m.accountId, m.from.address))
+      )
       if (notify && range.count > 0 && unseenNew.length > 0) {
         this.emitEvent({ type: 'new-mail', accountId, folder: path, messages: unseenNew })
       }
@@ -382,6 +496,9 @@ export class SyncEngine extends EventEmitter {
     const { body, files } = await this.session(accountId).imap.fetchBody(folder, uid)
     this.attachments.save(accountId, folder, uid, files)
     this.store.saveBody(body)
+    // Corpo completo appena scaricato: l'indice passa dai primi KB al testo intero.
+    const text = (body.text || htmlToText(body.html ?? '')).replace(/\s+/g, ' ').trim()
+    if (text) this.store.indexBody(accountId, folder, uid, text.slice(0, 100_000))
     return body
   }
 
@@ -467,6 +584,8 @@ export class SyncEngine extends EventEmitter {
   /** Compone la bozza (firma + citazione) e la invia. */
   async sendDraft(draft: DraftMessage): Promise<void> {
     await this.send(this.composeDraft(draft))
+    // Chi ricevo una mia mail diventa "Persone".
+    this.classifier.addContacts(draft.accountId, [...draft.to, ...draft.cc, ...draft.bcc])
   }
 
   /** Bozza → messaggio MIME con firma (immagini CID) sopra il testo citato. */

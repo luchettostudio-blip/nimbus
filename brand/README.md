@@ -1,7 +1,8 @@
 # Identità visiva (placeholder)
 
 Tutto ciò che riguarda nome, colori, logo e icona sta in questa cartella.
-I valori attuali sono **placeholder**: sostituiscili e ricompila.
+Logo e icona sono quelli definitivi di Nimbus; i **colori** sono ancora placeholder: sostituiscili e ricompila.
+`logo.svg` è usato nell'interfaccia come maschera (prende il colore del testo del tema), quindi basta un segno monocromatico.
 
 | File | Cosa contiene | Dove viene usato |
 |---|---|---|

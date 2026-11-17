@@ -47,6 +47,14 @@ export function notifySnoozeWoke(e: Extract<SyncEvent, { type: 'snooze-woke' }>,
   n.show()
 }
 
+/** Un mittente scrive ancora dopo la disiscrizione: proposta di blocco (nell'app). */
+export function notifyStillSending(name: string, show: () => void): void {
+  if (!Notification.isSupported()) return
+  const n = new Notification({ title: `${name} ti scrive ancora`, body: 'Ti sei disiscritto più di 7 giorni fa. Apri Nimbus per bloccarlo.' })
+  n.on('click', show)
+  n.show()
+}
+
 /** Invii programmati non partiti perché il PC era spento: chiede se inviarli ora. */
 export function notifyMissedSends(count: number, open: () => void): void {
   if (!Notification.isSupported() || count === 0) return

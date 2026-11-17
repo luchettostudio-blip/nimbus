@@ -26,11 +26,23 @@ export function registerIpc(engine: SyncEngine, store: MailStore, getWindow: () 
     'folders:refresh': (id) => engine.refreshFolders(id),
     'folders:inboxes': () => engine.listInboxes(),
 
-    'messages:list': (id, folder) => engine.listMessages(id, folder),
+    'messages:list': (id, folder, category) => engine.listMessages(id, folder, category),
     'messages:sync': (id, folder) => engine.syncFolder(id, folder, false),
     'messages:loadOlder': (id, folder) => engine.loadOlder(id, folder),
-    'messages:search': (id, q) => engine.search(id, q),
-    'messages:unified': () => engine.listUnifiedInbox(),
+    'messages:search': (q) => engine.searchMessages(q),
+    'search:server': (q) => engine.search.searchServer(q),
+    'search:status': () => engine.search.getStatus(),
+    'search:reindex': () => void engine.search.runIndexing(),
+    'messages:unified': (category) => engine.listUnifiedInbox(category),
+    'inbox:counts': (id) => engine.inboxCounts(id),
+    'unsub:plan': (id, address) => engine.unsubscriber.plan(id, address),
+    'unsub:run': (id, address, archiveAll) => engine.unsubscriber.unsubscribe(id, address, archiveAll),
+    'unsub:list': () => engine.unsubscriber.list(),
+    'unsub:subscriptions': (id) => engine.unsubscriber.subscriptions(id),
+    'unsub:block': (id, address) => engine.unsubscriber.block(id, address),
+    'unsub:unblock': (id, address) => engine.unsubscriber.unblock(id, address),
+    'inbox:moveSender': (id, address, category) => engine.moveSender(id, address, category),
+    'threads:get': (id, threadId) => engine.getThread(id, threadId),
     'messages:syncUnified': () => engine.syncAllInboxes(),
     'messages:body': (id, folder, uid) => engine.getBody(id, folder, uid),
     'messages:setSeen': (id, folder, uids, seen) => engine.setSeen(id, folder, uids, seen),
@@ -58,6 +70,7 @@ export function registerIpc(engine: SyncEngine, store: MailStore, getWindow: () 
     'settings:update': (patch) => {
       const next = store.updateSettings(patch)
       if ('launchAtLogin' in patch) applyLaunchAtLogin(next.launchAtLogin)
+      if ('indexMonths' in patch) void engine.search.runIndexing()
       return next
     },
 

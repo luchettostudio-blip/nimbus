@@ -5,13 +5,28 @@ Questo modulo contiene **tutta** la logica di dominio del client: niente Electro
 
 ```
 core/
-├─ models.ts             tipi di dominio (solo dati), incluso ProviderPreset
-├─ errors.ts             classificazione errori di rete + messaggi in italiano
-├─ imap/ImapService.ts   protocollo IMAP (imapflow + mailparser)
-├─ smtp/SmtpService.ts   invio (nodemailer) con fallback fra più server
-├─ store/MailStore.ts    cache SQLite (better-sqlite3)
-└─ sync/SyncEngine.ts    orchestrazione + eventi verso la UI
+├─ models.ts                      tipi di dominio (solo dati)
+├─ errors.ts                      classificazione errori di rete + messaggi in italiano
+├─ imap/ImapService.ts            protocollo IMAP (imapflow + mailparser)
+├─ smtp/SmtpService.ts            invio (nodemailer) con fallback fra più server
+├─ compose/buildOutgoing.ts       bozza → MIME (firma CID sopra il testo citato)
+├─ store/MailStore.ts, schema.ts  cache SQLite + migrazioni versionate
+├─ sync/SyncEngine.ts             orchestrazione + eventi verso la UI
+└─ features/
+   ├─ signatures/SignatureStore   firme, immagini CID, predefinite per account
+   ├─ outbox/Outbox               annulla invio + invio programmato (persistente)
+   ├─ snooze/Snoozer              "Rimanda" su cartella IMAP Nimbus/Rimandate
+   ├─ attachments/AttachmentCache cache allegati su disco
+   ├─ search/                     FTS5: parser operatori, query, indicizzazione in background
+   ├─ threads/                    raggruppamento JWZ + viste conversazione
+   ├─ classify/Classifier         inbox divisa (Persone / Newsletter / Notifiche)
+   └─ unsubscribe/                List-Unsubscribe (RFC 2369/8058), blocchi, iscrizioni
 ```
+
+Ogni funzione riceve dal motore solo ciò che le serve tramite una piccola interfaccia
+(`SnoozeHost`, `SearchHost`, `UnsubscribeHost`, …): in Swift diventano protocolli.
+Le mail salvate passano per `MailStore.onUpsert`, che aggancia thread e classificazione
+qualunque sia la provenienza (sync, ricerca sul server, snooze, indicizzazione).
 
 ## Flusso dei dati
 
@@ -53,20 +68,37 @@ I preset dei provider sono configurazione dell'app e vivono in `src/main/config/
 
 ## Regole del modulo
 
-- **Nessun import da `electron`** (né da React). Le dipendenze di piattaforma entrano tramite interfacce (`CredentialStore`).
+- **Nessun import da `electron`** (né da React). Le dipendenze di piattaforma entrano tramite interfacce
+  (`CredentialStore`, `PlatformServices`: elaborazione immagini, POST One-Click, apertura link).
 - I modelli sono **solo dati** serializzabili (passano via IPC e finiscono in SQLite come JSON/colonne).
 - Le password non fanno mai parte di `Account`: vivono solo nel `CredentialStore`.
 - Tutti i metodi di rete sono `async` e lanciano eccezioni; il chiamante (IPC) le converte in messaggi leggibili.
 
-## Schema SQLite (v1)
+## Schema SQLite (v3)
+
+Le migrazioni sono in `store/schema.ts`; la versione applicata è in `PRAGMA user_version`.
+Non si modifica mai una migrazione rilasciata: se ne aggiunge una nuova.
 
 ```sql
+-- v1
 accounts (id PK, json, created_at)
-folders  (account_id, path, name, role, delimiter, unread, total, uid_validity,  PK(account_id, path))
-messages (account_id, folder, uid, message_id, subject, from_name, from_address, to_json,
-          date, snippet, seen, flagged, has_attachments,                       PK(account_id, folder, uid))
-bodies   (account_id, folder, uid, json,                                        PK(account_id, folder, uid))
-kv       (key PK, value)
-```
+folders  (account_id, path, name, role, delimiter, unread, total, uid_validity)
+messages (account_id, folder, uid, message_id, subject, from_*, to_json, date, snippet, seen, flagged, has_attachments)
+bodies   (account_id, folder, uid, json)
+kv       (key PK, value)                      -- impostazioni (chiave "settings")
 
-La versione dello schema è in `PRAGMA user_version`; le migrazioni future vanno aggiunte in `MailStore.migrate()`.
+-- v2
+messages + in_reply_to, refs, thread_id, category, list_unsubscribe, list_unsubscribe_post,
+           list_id, precedence, auto_submitted, woke_at, attachment_names, indexed
+signatures, signature_images (BLOB), account_prefs           -- firme
+outbox                                                      -- annulla invio / programmati
+snoozes                                                     -- rimandate
+attachment_cache                                            -- file allegati su disco
+messages_fts (FTS5, rowid = messages.rowid) + trigger       -- ricerca
+thread_links (message_id → thread_id)                       -- conversazioni
+sender_rules, sent_contacts                                 -- inbox divisa
+unsubscriptions, blocked_senders                            -- disiscrizioni
+
+-- v3
+unsubscriptions + name
+```

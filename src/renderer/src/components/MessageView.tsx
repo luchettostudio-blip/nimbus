@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlarmClock, Archive, Forward, ImageOff, Mail, MailOpen, Reply, ReplyAll, Star, Trash2 } from 'lucide-react'
+import { AlarmClock, Archive, Forward, ImageOff, Mail, MailOpen, MailX, Reply, ReplyAll, Star, Trash2 } from 'lucide-react'
 import { snoozePresets } from '../lib/schedule'
 import { TimeMenu } from './TimeMenu'
 import { AttachmentStrip } from './viewer/AttachmentStrip'
+import { Conversation } from './thread/Conversation'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { call } from '../lib/api'
 import { avatarHue, displayName, formatAddress, initials, longDate } from '../lib/format'
@@ -17,6 +18,7 @@ export function MessageView() {
   const bodyError = useStore((s) => s.bodyError)
   const { archive, trash, toggleSeen, toggleFlagged, openCompose, snooze, setSnoozeMenu } = useStore.getState()
   const snoozeOpen = useStore((s) => s.snoozeMenuOpen)
+  const threadMode = useStore((s) => !!s.settings?.threads && (currentMessage(s)?.threadCount ?? 1) > 1)
 
   if (!msg) {
     return (
@@ -61,6 +63,15 @@ export function MessageView() {
           </AnimatePresence>
         </div>
         <div className="flex-1" />
+        {msg.listUnsubscribe && msg.from && (
+          <button
+            onClick={() => void useStore.getState().askUnsubscribe(msg.accountId, msg.from!.address, msg.from!.name || null)}
+            title="Disiscriviti da questa lista"
+            className="mr-1 flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[12.5px] text-muted transition hover:border-danger/40 hover:bg-danger/10 hover:text-danger"
+          >
+            <MailX size={14} /> Disiscriviti
+          </button>
+        )}
         <ToolButton label="Rispondi" hotkey="R" onClick={() => openCompose('reply')}>
           <Reply size={16} />
         </ToolButton>
@@ -83,6 +94,16 @@ export function MessageView() {
         >
           <h2 className="selectable mb-5 mt-2 text-[22px] font-semibold leading-tight tracking-[-0.01em]">{msg.subject}</h2>
 
+          {threadMode ? (
+            <>
+              <div className="-mt-3 mb-4 text-[12.5px] text-muted">
+                {msg.threadCount} messaggi · {(msg.participants ?? []).join(', ')}
+                {account && <> · {account.email}</>}
+              </div>
+              <Conversation />
+            </>
+          ) : (
+          <>
           <div className="mb-6 flex items-start gap-3">
             <div
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold text-white"
@@ -111,6 +132,8 @@ export function MessageView() {
           {body && <EmailBody html={body.html} text={body.text} />}
 
           {body && <AttachmentStrip accountId={msg.accountId} folder={msg.folder} uid={msg.uid} attachments={body.attachments} />}
+          </>
+          )}
         </motion.div>
       </AnimatePresence>
     </section>
@@ -143,7 +166,7 @@ function BodySkeleton() {
  * Corpo email in un iframe sandbox (niente script, niente navigazione).
  * Le immagini remote sono bloccate finché l'utente non clicca "Mostra immagini".
  */
-function EmailBody({ html, text }: { html: string | null; text: string | null }) {
+export function EmailBody({ html, text }: { html: string | null; text: string | null }) {
   if (!html) return <PlainTextBody text={text ?? ''} />
   return <HtmlBody html={html} />
 }

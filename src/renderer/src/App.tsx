@@ -12,6 +12,10 @@ import { Settings } from './components/settings/Settings'
 import { ScheduledView } from './components/ScheduledView'
 import { SnoozedView } from './components/SnoozedView'
 import { AttachmentViewer } from './components/viewer/AttachmentViewer'
+import { RowContextMenu } from './components/RowContextMenu'
+import { UnsubscribeDialog } from './components/unsubscribe/UnsubscribeDialog'
+import { SubscriptionsView } from './components/unsubscribe/SubscriptionsView'
+import { StillSendingBanner } from './components/unsubscribe/StillSendingBanner'
 import { useHotkeys } from './hooks/useHotkeys'
 import { subscribe } from './lib/api'
 import { useStore } from './store'
@@ -24,6 +28,8 @@ export default function App() {
   const settingsOpen = useStore((s) => s.settingsOpen)
   const viewKind = useStore((s) => s.view?.kind)
   const viewerOpen = useStore((s) => s.viewer !== null)
+  const contextMenuOpen = useStore((s) => s.contextMenu !== null)
+  const unsubOpen = useStore((s) => s.unsubDialog !== null)
 
   useHotkeys()
 
@@ -55,6 +61,8 @@ export default function App() {
               <ScheduledView />
             ) : viewKind === 'snoozed' ? (
               <SnoozedView />
+            ) : viewKind === 'subscriptions' ? (
+              <SubscriptionsView />
             ) : (
               <>
                 <MessageList />
@@ -70,6 +78,9 @@ export default function App() {
       <AnimatePresence>{showOnboarding && <Onboarding key="onboarding" />}</AnimatePresence>
       <AnimatePresence>{settingsOpen && <Settings key="settings" />}</AnimatePresence>
       <AnimatePresence>{viewerOpen && <AttachmentViewer key="viewer" />}</AnimatePresence>
+      {contextMenuOpen && <RowContextMenu />}
+      <AnimatePresence>{unsubOpen && <UnsubscribeDialog key="unsub" />}</AnimatePresence>
+      <StillSendingBanner />
       <Toasts />
     </div>
   )

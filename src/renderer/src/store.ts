@@ -13,14 +13,19 @@ import type {
   AttachmentInfo,
   DraftMessage,
   Folder,
+  InboxCategory,
+  IndexStatus,
   MessageBody,
   MessageSummary,
   OutboxItem,
   SignaturePrefs,
   SnoozeItem,
   SignatureView,
-  SyncEvent
+  Subscription,
+  SyncEvent,
+  Unsubscription
 } from '@core/models'
+import type { UnsubscribePlan } from '@core/features/unsubscribe/listUnsubscribe'
 import { call } from './lib/api'
 import { formatWhen } from './lib/schedule'
 
@@ -63,6 +68,15 @@ export interface ViewerState {
   index: number
 }
 
+export interface ThreadState {
+  /** Chiave del messaggio selezionato nella lista che ha aperto la conversazione. */
+  key: string
+  accountId: string
+  threadId: string
+  messages: MessageSummary[]
+  bodies: Record<string, MessageBody>
+}
+
 export type SettingsSection = 'general' | 'signatures' | 'unsubscribes'
 
 export interface Toast {
@@ -71,7 +85,13 @@ export interface Toast {
   kind: 'info' | 'error'
 }
 
-export type View = { kind: 'unified' } | { kind: 'folder'; accountId: string; path: string } | { kind: 'scheduled' } | { kind: 'snoozed' }
+export type View =
+  | { kind: 'unified' }
+  | { kind: 'folder'; accountId: string; path: string }
+  | { kind: 'scheduled' }
+  | { kind: 'snoozed' }
+  /** "Gestisci iscrizioni"; `back` è la vista a cui tornare. */
+  | { kind: 'subscriptions'; back: View | null }
 
 type AccountStatus = Extract<SyncEvent, { type: 'status' }>['state']
 
@@ -95,8 +115,12 @@ interface State {
   loadingOlder: boolean
   noMoreOlder: boolean
 
+  /** Barra di ricerca aperta nella lista. */
+  searchOpen: boolean
   searchQuery: string
   searchResults: MessageSummary[] | null
+  serverSearching: boolean
+  indexStatus: IndexStatus | null
 
   compose: ComposeState | null
   paletteOpen: boolean
@@ -110,6 +134,18 @@ interface State {
   snoozes: SnoozeItem[]
   snoozeMenuOpen: boolean
   viewer: ViewerState | null
+  /** Conversazione aperta (vista chat). */
+  thread: ThreadState | null
+  /** Scheda della Posta in arrivo divisa. */
+  inboxTab: InboxCategory
+  tabCounts: Record<InboxCategory, number>
+  /** Menu contestuale (clic destro) su una riga della lista. */
+  contextMenu: { x: number; y: number; key: string } | null
+  unsubDialog: { accountId: string; address: string; name: string | null; plan: UnsubscribePlan } | null
+  unsubscriptions: Unsubscription[]
+  subscriptions: Subscription[]
+  /** Mittenti che scrivono ancora dopo la disiscrizione (proposta di blocco). */
+  blockSuggestions: { id: string; accountId: string; address: string; name: string | null }[]
   showOnboarding: boolean
   toasts: Toast[]
 
@@ -126,14 +162,19 @@ interface State {
   openMessageRef(ref: { accountId: string; folder: string; uid: number }): Promise<void>
   moveSelection(delta: number): void
   loadOlder(): Promise<void>
-  search(q: string): Promise<void>
+  /** Aggiorna la query: i risultati arrivano dopo 150 ms di pausa nella digitazione. */
+  search(q: string): void
+  openSearch(initial?: string): void
+  closeSearch(): void
+  /** IMAP SEARCH sul server per ciò che non è nell'indice locale. */
+  searchServer(): Promise<void>
 
   toggleSeen(): Promise<void>
   toggleFlagged(): Promise<void>
   archive(): Promise<void>
   trash(): Promise<void>
 
-  openCompose(mode: ComposeMode): void
+  openCompose(mode: ComposeMode, target?: { msg: MessageSummary; body: MessageBody | null; text?: string }): void
   updateCompose(patch: Partial<ComposeState>): void
   closeCompose(): void
   /** Invia (con finestra "Annulla invio") oppure programma se `scheduleAt` è indicato. */
@@ -145,6 +186,22 @@ interface State {
   selectScheduled(): void
   selectSnoozed(): void
   openViewer(v: ViewerState): void
+  /** Chiede conferma per la disiscrizione dal mittente. */
+  askUnsubscribe(accountId: string, address: string, name: string | null): Promise<void>
+  closeUnsubscribe(): void
+  confirmUnsubscribe(archiveAll: boolean): Promise<void>
+  loadUnsubscriptions(): Promise<void>
+  loadSubscriptions(): Promise<void>
+  openSubscriptions(): void
+  closeSubscriptions(): void
+  dismissBlockSuggestion(id: string): void
+  setInboxTab(tab: InboxCategory): void
+  /** Sposta il mittente della mail in un'altra scheda (Nimbus lo ricorda). */
+  moveToTab(key: string, tab: InboxCategory): Promise<void>
+  openContextMenu(x: number, y: number, key: string): void
+  closeContextMenu(): void
+  /** Risposta rapida in fondo alla conversazione; `expand` apre il compositore completo. */
+  quickReply(text: string, expand?: boolean): Promise<boolean>
   closeViewer(): void
   moveViewer(delta: number): void
   loadSnoozes(): Promise<void>
@@ -165,6 +222,7 @@ interface State {
 }
 
 let toastSeq = 1
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 let markSeenTimer: ReturnType<typeof setTimeout> | null = null
 
 /** Messaggi attualmente visibili nella lista (risultati di ricerca o vista corrente). */
@@ -192,8 +250,11 @@ export const useStore = create<State>((set, get) => ({
   status: {},
   loadingOlder: false,
   noMoreOlder: false,
+  searchOpen: false,
   searchQuery: '',
   searchResults: null,
+  serverSearching: false,
+  indexStatus: null,
   compose: null,
   paletteOpen: false,
   settings: null,
@@ -206,6 +267,14 @@ export const useStore = create<State>((set, get) => ({
   snoozes: [],
   snoozeMenuOpen: false,
   viewer: null,
+  thread: null,
+  inboxTab: 'people',
+  tabCounts: { people: 0, newsletter: 0, notifications: 0 },
+  contextMenu: null,
+  unsubDialog: null,
+  unsubscriptions: [],
+  subscriptions: [],
+  blockSuggestions: [],
   showOnboarding: false,
   toasts: [],
 
@@ -234,6 +303,18 @@ export const useStore = create<State>((set, get) => ({
       handleOutboxEvent(e, get, set)
       return
     }
+    if (e.type === 'index-progress') {
+      set({ indexStatus: { running: e.running, done: e.done, total: e.total } })
+      return
+    }
+    if (e.type === 'unsubscriptions') {
+      void get().loadUnsubscriptions()
+      return
+    }
+    if (e.type === 'unsub-still-sending') {
+      set({ blockSuggestions: [...get().blockSuggestions.filter((b) => b.id !== e.id), { id: e.id, accountId: e.accountId, address: e.address, name: e.name }] })
+      return
+    }
     if (e.type === 'snooze' || e.type === 'snooze-woke') {
       void get().loadSnoozes()
       return
@@ -252,10 +333,13 @@ export const useStore = create<State>((set, get) => ({
     } else if (e.type === 'messages') {
       const v = s.view
       if (!v) return
+      // Con thread o inbox divisa, una mail in un'altra cartella (es. la mia risposta in
+      // Inviata) cambia conversazioni e schede di quelle mostrate: si ricarica.
+      const threads = !!s.settings?.threads || !!s.settings?.splitInbox
       if (v.kind === 'unified') {
         const isInbox = s.inboxes.some((f) => f.accountId === e.accountId && f.path === e.folder)
-        if (isInbox) void get().reloadMessages()
-      } else if (v.kind === 'folder' && v.accountId === e.accountId && v.path === e.folder) {
+        if (isInbox || threads) void get().reloadMessages()
+      } else if (v.kind === 'folder' && v.accountId === e.accountId && (v.path === e.folder || threads)) {
         void get().reloadMessages()
       }
     }
@@ -272,7 +356,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async selectUnified() {
-    set({ view: { kind: 'unified' }, selectedKey: null, body: null, searchResults: null, searchQuery: '', noMoreOlder: true })
+    set({ view: { kind: 'unified' }, selectedKey: null, body: null, searchResults: null, searchQuery: '', searchOpen: false, noMoreOlder: true })
     await get().reloadMessages()
     call('messages:syncUnified').catch(() => {})
   },
@@ -280,7 +364,7 @@ export const useStore = create<State>((set, get) => ({
   async selectFolder(path) {
     const { accountId } = get()
     if (!accountId) return
-    set({ view: { kind: 'folder', accountId, path }, selectedKey: null, body: null, searchResults: null, searchQuery: '', noMoreOlder: false })
+    set({ view: { kind: 'folder', accountId, path }, selectedKey: null, body: null, searchResults: null, searchQuery: '', searchOpen: false, noMoreOlder: false })
     await get().reloadMessages()
     // Aggiorna dal server in background; l'evento 'messages' ricaricherà la lista.
     call('messages:sync', accountId, path).catch((err) => get().toast(String(err.message ?? err), 'error'))
@@ -298,10 +382,12 @@ export const useStore = create<State>((set, get) => ({
 
   async reloadMessages() {
     const view = get().view
-    if (!view || view.kind === 'scheduled' || view.kind === 'snoozed') return
-    const messages = view.kind === 'unified' ? await call('messages:unified') : await call('messages:list', view.accountId, view.path)
-    if (get().view !== view) return
+    if (!view || view.kind === 'scheduled' || view.kind === 'snoozed' || view.kind === 'subscriptions') return
+    const tab = isSplitInbox(get()) ? get().inboxTab : null
+    const messages = view.kind === 'unified' ? await call('messages:unified', tab) : await call('messages:list', view.accountId, view.path, tab)
+    if (get().view !== view || (isSplitInbox(get()) ? get().inboxTab : null) !== tab) return
     set({ messages })
+    if (tab) void call('inbox:counts', view.kind === 'unified' ? null : view.accountId).then((tabCounts) => set({ tabCounts }))
     const sel = get().selectedKey
     if (sel !== null && !visibleMessages(get()).some((m) => msgKey(m) === sel)) set({ selectedKey: null, body: null })
   },
@@ -312,10 +398,13 @@ export const useStore = create<State>((set, get) => ({
 
   async selectMessage(key) {
     if (markSeenTimer) clearTimeout(markSeenTimer)
-    set({ selectedKey: key, body: null, bodyError: null })
+    set({ selectedKey: key, body: null, bodyError: null, thread: null })
     if (key === null) return
     const msg = currentMessage(get())
     if (!msg) return
+    if (get().settings?.threads && (msg.threadCount ?? 1) > 1 && msg.threadId) {
+      void loadThread(get, set, key, msg)
+    }
     set({ bodyLoading: true })
     try {
       const body = await call('messages:body', msg.accountId, msg.folder, msg.uid)
@@ -366,15 +455,48 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async search(q) {
-    set({ searchQuery: q })
+  search(q) {
+    set({ searchQuery: q, searchOpen: true })
+    if (searchTimer) clearTimeout(searchTimer)
     if (!q.trim()) {
       set({ searchResults: null })
       return
     }
-    // La ricerca copre tutti gli account (cache locale).
-    const results = await call('messages:search', null, q.trim())
-    if (get().searchQuery === q) set({ searchResults: results, selectedKey: null, body: null })
+    // Debounce: si cerca quando l'utente fa una pausa di 150 ms.
+    searchTimer = setTimeout(async () => {
+      const results = await call('messages:search', q.trim()).catch(() => [] as MessageSummary[])
+      if (get().searchQuery !== q) return
+      const sel = get().selectedKey
+      const keep = sel !== null && results.some((m) => msgKey(m) === sel)
+      set({ searchResults: results, ...(keep ? {} : { selectedKey: null, body: null }) })
+    }, 150)
+  },
+
+  openSearch(initial) {
+    set({ searchOpen: true })
+    if (initial !== undefined) get().search(initial)
+  },
+
+  closeSearch() {
+    if (searchTimer) clearTimeout(searchTimer)
+    const hadResults = get().searchResults !== null
+    set({ searchOpen: false, searchQuery: '', searchResults: null, ...(hadResults ? { selectedKey: null, body: null } : {}) })
+  },
+
+  async searchServer() {
+    const q = get().searchQuery.trim()
+    if (!q) return
+    set({ serverSearching: true })
+    try {
+      const added = await call('search:server', q)
+      const results = await call('messages:search', q)
+      if (get().searchQuery.trim() === q) set({ searchResults: results })
+      get().toast(added ? `Trovate ${added} mail sul server` : 'Nessun altro risultato sul server')
+    } catch (e) {
+      get().toast((e as Error).message, 'error')
+    } finally {
+      set({ serverSearching: false })
+    }
   },
 
   async toggleSeen() {
@@ -392,9 +514,10 @@ export const useStore = create<State>((set, get) => ({
   async archive() {
     const msg = currentMessage(get())
     if (!msg) return
+    const uids = threadUidsInFolder(get(), msg)
     advanceAfterRemoval(get, set, msgKey(msg))
     try {
-      await call('messages:archive', msg.accountId, msg.folder, [msg.uid])
+      await call('messages:archive', msg.accountId, msg.folder, uids)
       get().toast('Archiviato')
     } catch (e) {
       get().toast((e as Error).message, 'error')
@@ -404,16 +527,17 @@ export const useStore = create<State>((set, get) => ({
   async trash() {
     const msg = currentMessage(get())
     if (!msg) return
+    const uids = threadUidsInFolder(get(), msg)
     advanceAfterRemoval(get, set, msgKey(msg))
     try {
-      await call('messages:trash', msg.accountId, msg.folder, [msg.uid])
+      await call('messages:trash', msg.accountId, msg.folder, uids)
       get().toast('Eliminato')
     } catch (e) {
       get().toast((e as Error).message, 'error')
     }
   },
 
-  openCompose(mode) {
+  openCompose(mode, target) {
     const s = get()
     const defaultAccount = (s.view?.kind === 'folder' ? s.view.accountId : s.accountId) ?? s.accounts[0]?.id
     if (!defaultAccount) return
@@ -422,8 +546,8 @@ export const useStore = create<State>((set, get) => ({
       set({ compose: { mode, accountId: defaultAccount, to: '', cc: '', subject: '', body: '', quoted: null, signatureId } })
       return
     }
-    const msg = currentMessage(s)
-    const body = s.body
+    const msg = target?.msg ?? currentMessage(s)
+    const body = target ? target.body : s.body
     if (!msg) return
     // Si risponde sempre dall'account che ha ricevuto il messaggio.
     const accountId = msg.accountId
@@ -431,7 +555,13 @@ export const useStore = create<State>((set, get) => ({
     const originalText = (body?.text ?? msg.snippet).replace(/\s+$/, '')
     const header = `Il giorno ${new Date(msg.date).toLocaleString('it-IT')}, ${msg.from?.name || msg.from?.address} ha scritto:`
     const signatureId = defaultSignature(s, accountId, mode)
-    const refs = [...(body?.references ?? []), ...(msg.messageId ? [msg.messageId] : [])]
+    // RFC 5322: References = References del messaggio (o, se mancano, il suo In-Reply-To) + il suo Message-ID.
+    const parentRefs = body?.references?.length
+      ? body.references
+      : msg.references?.length
+        ? msg.references
+        : [body?.inReplyTo ?? msg.inReplyTo].filter((x): x is string => !!x)
+    const refs = [...new Set([...parentRefs, ...(msg.messageId ? [msg.messageId] : [])])]
 
     if (mode === 'forward') {
       const fwdHeader = [
@@ -470,7 +600,7 @@ export const useStore = create<State>((set, get) => ({
         to: to.join(', '),
         cc: cc.join(', '),
         subject: prefixSubject('Re: ', msg.subject),
-        body: '',
+        body: target?.text ?? '',
         quoted: { header, text: originalText },
         signatureId,
         inReplyTo: msg.messageId ?? undefined,
@@ -567,6 +697,104 @@ export const useStore = create<State>((set, get) => ({
     void get().loadOutbox()
   },
 
+  async askUnsubscribe(accountId, address, name) {
+    set({ contextMenu: null })
+    const plan = await call('unsub:plan', accountId, address)
+    if (!plan) {
+      get().toast('Questo mittente non indica come disiscriversi', 'error')
+      return
+    }
+    set({ unsubDialog: { accountId, address, name, plan } })
+  },
+
+  closeUnsubscribe() {
+    set({ unsubDialog: null })
+  },
+
+  async confirmUnsubscribe(archiveAll) {
+    const d = get().unsubDialog
+    if (!d) return
+    try {
+      const r = await call('unsub:run', d.accountId, d.address, archiveAll)
+      set({ unsubDialog: null })
+      const who = d.name || d.address
+      get().toast(
+        r.method === 'browser' ? `Pagina di disiscrizione di ${who} aperta nel browser` : r.method === 'mailto' ? `Mail di disiscrizione inviata a ${who}` : `Disiscritto da ${who}`
+      )
+      await Promise.all([get().reloadMessages(), get().loadSubscriptions(), get().loadUnsubscriptions()])
+    } catch (e) {
+      get().toast((e as Error).message, 'error')
+    }
+  },
+
+  async loadUnsubscriptions() {
+    set({ unsubscriptions: await call('unsub:list') })
+  },
+
+  async loadSubscriptions() {
+    const v = get().view
+    const back = v?.kind === 'subscriptions' ? v.back : v
+    const accountId = back?.kind === 'folder' ? back.accountId : null
+    set({ subscriptions: await call('unsub:subscriptions', accountId) })
+  },
+
+  openSubscriptions() {
+    set({ view: { kind: 'subscriptions', back: get().view }, selectedKey: null, body: null, thread: null })
+    void get().loadSubscriptions()
+  },
+
+  closeSubscriptions() {
+    const v = get().view
+    if (v?.kind !== 'subscriptions') return
+    set({ view: v.back })
+    void get().reloadMessages()
+  },
+
+  dismissBlockSuggestion(id) {
+    set({ blockSuggestions: get().blockSuggestions.filter((b) => b.id !== id) })
+  },
+
+  setInboxTab(tab) {
+    if (get().inboxTab === tab) return
+    set({ inboxTab: tab, selectedKey: null, body: null, thread: null })
+    void get().reloadMessages()
+  },
+
+  async moveToTab(key, tab) {
+    const msg = visibleMessages(get()).find((m) => msgKey(m) === key)
+    if (!msg?.from?.address) return
+    set({ contextMenu: null })
+    const n = await call('inbox:moveSender', msg.accountId, msg.from.address, tab)
+    const label = { people: 'Persone', newsletter: 'Newsletter', notifications: 'Notifiche' }[tab]
+    get().toast(`Da ora le mail di ${msg.from.name || msg.from.address} vanno in ${label}${n > 1 ? ` (${n} spostate)` : ''}`)
+    await get().reloadMessages()
+  },
+
+  openContextMenu(x, y, key) {
+    set({ contextMenu: { x, y, key } })
+  },
+
+  closeContextMenu() {
+    set({ contextMenu: null })
+  },
+
+  async quickReply(text, expand) {
+    const th = get().thread
+    if (!th || (!text.trim() && !expand)) return false
+    const me = get().accounts.find((a) => a.id === th.accountId)?.email.toLowerCase()
+    // Si risponde all'ultimo messaggio degli altri (o all'ultimo in assoluto).
+    const target = [...th.messages].reverse().find((m) => m.from?.address.toLowerCase() !== me) ?? th.messages[th.messages.length - 1]
+    get().openCompose('replyAll', { msg: target, body: th.bodies[msgKey(target)] ?? null, text })
+    // References con l'intera catena della conversazione fino al messaggio a cui si risponde.
+    const chain = th.messages
+      .filter((m) => m.date <= target.date)
+      .flatMap((m) => [...(m.references ?? []), ...(m.messageId ? [m.messageId] : [])])
+    const c = get().compose
+    if (c) set({ compose: { ...c, references: [...new Set([...chain, ...(c.references ?? [])])] } })
+    if (expand) return true
+    return get().send()
+  },
+
   openViewer(v) {
     set({ viewer: v })
   },
@@ -655,6 +883,10 @@ export const useStore = create<State>((set, get) => ({
   async updateSettings(patch) {
     set({ settings: { ...get().settings!, ...patch } })
     set({ settings: await call('settings:update', patch) })
+    if ('threads' in patch || 'splitInbox' in patch) {
+      set({ selectedKey: null, body: null, thread: null })
+      await get().reloadMessages()
+    }
   },
 
   async loadSignatures(accountId) {
@@ -691,9 +923,54 @@ function advanceAfterRemoval(get: () => State, set: (p: Partial<State>) => void,
   void get().selectMessage(next ? msgKey(next) : null)
 }
 
+/** Non aggiunge "Re:" se l'oggetto è già una risposta (Re:, R:, RIF:, AW:…) né "Fwd:" a un inoltro (Fwd:, I:, TR:…). */
 function prefixSubject(prefix: string, subject: string): string {
-  const re = new RegExp(`^${prefix.trim()}`, 'i')
-  return re.test(subject.trim()) ? subject : prefix + subject
+  const already = prefix.startsWith('Re') ? /^\s*(re|r|ri|rif|aw|sv|antw)(\[\d+\])?\s*:/i : /^\s*(fwd?|fw|i|inoltro|tr|wg)(\[\d+\])?\s*:/i
+  return already.test(subject) ? subject : prefix + subject
+}
+
+/** true se la vista è una Posta in arrivo (singola o unificata) con la divisione attiva. */
+export function isSplitInbox(s: Pick<State, 'view' | 'folders' | 'settings'>): boolean {
+  if (!s.settings?.splitInbox || !s.view) return false
+  if (s.view.kind === 'unified') return true
+  if (s.view.kind !== 'folder') return false
+  const path = s.view.path
+  return s.folders.find((f) => f.path === path)?.role === 'inbox'
+}
+
+/** UID dei messaggi della conversazione aperta che stanno nella stessa cartella. */
+function threadUidsInFolder(s: State, msg: MessageSummary): number[] {
+  const th = s.thread
+  if (!th || th.key !== msgKey(msg)) return [msg.uid]
+  const uids = th.messages.filter((m) => m.folder === msg.folder && m.accountId === msg.accountId).map((m) => m.uid)
+  return uids.length ? uids : [msg.uid]
+}
+
+/** Carica conversazione + corpi; dopo un attimo segna come lette le non lette. */
+async function loadThread(get: () => State, set: (p: Partial<State>) => void, key: string, msg: MessageSummary): Promise<void> {
+  const messages = await call('threads:get', msg.accountId, msg.threadId!)
+  if (get().selectedKey !== key) return
+  set({ thread: { key, accountId: msg.accountId, threadId: msg.threadId!, messages, bodies: {} } })
+  // Corpi in parallelo (cache locale nella maggior parte dei casi).
+  await Promise.all(
+    messages.map(async (m) => {
+      try {
+        const b = await call('messages:body', m.accountId, m.folder, m.uid)
+        const th = get().thread
+        if (th?.key === key) set({ thread: { ...th, bodies: { ...th.bodies, [msgKey(m)]: b } } })
+      } catch {
+        /* il messaggio resta con l'anteprima */
+      }
+    })
+  )
+  setTimeout(() => {
+    const th = get().thread
+    if (th?.key !== key) return
+    const unread = th.messages.filter((m) => !m.seen)
+    const byFolder = new Map<string, number[]>()
+    for (const m of unread) byFolder.set(m.folder, [...(byFolder.get(m.folder) ?? []), m.uid])
+    for (const [folder, uids] of byFolder) void call('messages:setSeen', th.accountId, folder, uids, true).catch(() => {})
+  }, 900)
 }
 
 function composeToDraft(c: ComposeState): DraftMessage {

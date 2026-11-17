@@ -153,6 +153,7 @@ export function Sidebar() {
         )}
       </nav>
 
+      <IndexProgress />
       <div className="mt-2 border-t border-line pt-2">
         {!multi && account && (
           <div className="flex items-center gap-2.5 px-2 py-1.5">
@@ -185,6 +186,24 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  )
+}
+
+/** Indicatore discreto dell'indicizzazione per la ricerca. */
+function IndexProgress() {
+  const st = useStore((s) => s.indexStatus)
+  if (!st?.running || st.total === 0) return null
+  const pct = Math.round((st.done / st.total) * 100)
+  return (
+    <div className="px-2.5 pt-2" title={`${st.done} di ${st.total} mail indicizzate`}>
+      <div className="mb-1 flex justify-between text-[11px] text-faint">
+        <span>Indicizzazione ricerca</span>
+        <span className="tabular-nums">{pct}%</span>
+      </div>
+      <div className="h-0.5 overflow-hidden rounded-full bg-line">
+        <div className="h-full bg-accent/70 transition-all" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
   )
 }
 

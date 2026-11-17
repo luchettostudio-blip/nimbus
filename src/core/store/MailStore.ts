@@ -50,6 +50,13 @@ interface MessageRow {
 export class MailStore {
   private db: Database.Database
 
+  /** Funzioni chiamate dopo ogni salvataggio di mail (thread, classificazione…). */
+  private upsertHooks: ((list: MessageSummary[]) => void)[] = []
+
+  onUpsert(fn: (list: MessageSummary[]) => void): void {
+    this.upsertHooks.push(fn)
+  }
+
   /** Connessione grezza, per i repository delle funzioni (firme, outbox, ricerca…). */
   get raw(): Database.Database {
     return this.db
@@ -179,9 +186,33 @@ export class MailStore {
         list_id = coalesce(excluded.list_id, list_id), precedence = coalesce(excluded.precedence, precedence),
         auto_submitted = coalesce(excluded.auto_submitted, auto_submitted)`)
     const tx = this.db.transaction((rows: MessageSummary[]) => {
-      for (const m of rows) stmt.run(toRow(m))
+      for (const m of rows) {
+        stmt.run(toRow(m))
+        if (m.bodyText) this.indexBody(m.accountId, m.folder, m.uid, m.bodyText)
+      }
     })
     tx(list)
+    for (const hook of this.upsertHooks) hook(list)
+  }
+
+  /** Fra gli UID dati, quelli non ancora in cache o non ancora indicizzati. */
+  uidsNeedingIndex(accountId: string, folder: string, uids: number[]): number[] {
+    const done = new Set(
+      (this.db.prepare('SELECT uid FROM messages WHERE account_id = ? AND folder = ? AND indexed = 1').all(accountId, folder) as { uid: number }[]).map(
+        (r) => r.uid
+      )
+    )
+    return uids.filter((u) => !done.has(u))
+  }
+
+  /** Aggiorna il testo del corpo nell'indice full-text e segna la mail come indicizzata. */
+  indexBody(accountId: string, folder: string, uid: number, text: string): void {
+    const row = this.db.prepare('SELECT rowid FROM messages WHERE account_id = ? AND folder = ? AND uid = ?').get(accountId, folder, uid) as
+      | { rowid: number }
+      | undefined
+    if (!row) return
+    this.db.prepare('UPDATE messages_fts SET body = ? WHERE rowid = ?').run(text, row.rowid)
+    this.db.prepare('UPDATE messages SET indexed = 1 WHERE rowid = ?').run(row.rowid)
   }
 
   /** Le mail tornate da uno snooze contano dall'orario di risveglio: finiscono in cima. */
@@ -197,20 +228,6 @@ export class MailStore {
       .prepare('SELECT * FROM messages WHERE account_id = ? AND folder = ? AND uid = ?')
       .get(accountId, folder, uid) as MessageRow | undefined
     return row ? fromRow(row) : undefined
-  }
-
-  /** Ricerca semplice su oggetto/mittente/anteprima (in un account, o in tutti se accountId è null). */
-  searchMessages(accountId: string | null, query: string, limit = 200): MessageSummary[] {
-    // "!" come carattere di escape per % e _ (evita le complicazioni delle backslash).
-    const q = `%${query.replace(/[!%_]/g, (c) => '!' + c)}%`
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM messages WHERE (? IS NULL OR account_id = ?) AND
-           (subject LIKE ? ESCAPE '!' OR from_name LIKE ? ESCAPE '!' OR from_address LIKE ? ESCAPE '!' OR snippet LIKE ? ESCAPE '!')
-         ORDER BY date DESC LIMIT ?`
-      )
-      .all(accountId, accountId, q, q, q, q, limit) as MessageRow[]
-    return rows.map(fromRow)
   }
 
   /** Messaggi delle cartelle "inbox" di tutti gli account, dal più recente. */

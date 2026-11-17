@@ -24,7 +24,9 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { call } from '../lib/api'
-import { useStore } from '../store'
+import type { MessageSummary } from '@core/models'
+import { msgKey, useStore } from '../store'
+import { Highlighted } from './search/SearchBar'
 import { folderLabel } from './Sidebar'
 
 interface Cmd {
@@ -33,6 +35,10 @@ interface Cmd {
   group: string
   icon: LucideIcon
   hotkey?: string
+  /** Testo secondario (es. mittente). */
+  detail?: string
+  /** Etichetta con le parole trovate evidenziate (\u0002…\u0003). */
+  highlight?: string
   run: () => void
 }
 
@@ -44,6 +50,20 @@ export function CommandPalette() {
   const hasSelection = useStore((s) => s.selectedKey !== null)
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
+  const [mailHits, setMailHits] = useState<MessageSummary[]>([])
+
+  // Risultati di ricerca live (stesso indice FTS della lista), con debounce.
+  useEffect(() => {
+    const q = query.trim()
+    if (q.length < 2) {
+      setMailHits([])
+      return
+    }
+    const t = setTimeout(() => {
+      void call('messages:search', q).then((r) => setMailHits(r.slice(0, 5)), () => setMailHits([]))
+    }, 150)
+    return () => clearTimeout(t)
+  }, [query])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -109,19 +129,37 @@ export function CommandPalette() {
     const q = query.trim().toLowerCase()
     const matches = q ? commands.filter((c) => fuzzy(c.label.toLowerCase(), q)) : commands
     if (q) {
+      for (const m of mailHits) {
+        matches.push({
+          id: `mail:${msgKey(m)}`,
+          label: m.subject,
+          detail: m.from?.name || m.from?.address || '',
+          highlight: m.highlight?.subject,
+          group: 'Messaggi',
+          icon: Mail,
+          run: () => {
+            setPalette(false)
+            const s = useStore.getState()
+            s.openSearch(query.trim())
+            // Apre il messaggio appena arrivano i risultati.
+            setTimeout(() => void useStore.getState().selectMessage(msgKey(m)), 250)
+          }
+        })
+      }
       matches.push({
         id: 'search',
         label: `Cerca messaggi: “${query.trim()}”`,
         group: 'Ricerca',
         icon: Search,
+        hotkey: '/',
         run: () => {
           setPalette(false)
-          void useStore.getState().search(query.trim())
+          useStore.getState().openSearch(query.trim())
         }
       })
     }
     return matches
-  }, [commands, query, setPalette])
+  }, [commands, query, setPalette, mailHits])
 
   useEffect(() => setIndex(0), [query])
   useEffect(() => {
@@ -189,7 +227,8 @@ export function CommandPalette() {
                   className={`flex h-9 w-full items-center gap-3 rounded-lg px-3 text-left text-[13px] ${i === index ? 'bg-selected text-fg' : 'text-muted'}`}
                 >
                   <Icon size={15} strokeWidth={1.8} />
-                  <span className="flex-1 truncate">{c.label}</span>
+                  <span className="flex-1 truncate">{c.highlight ? <Highlighted text={c.highlight} /> : c.label}</span>
+                  {c.detail && <span className="max-w-[160px] truncate text-[11.5px] text-faint">{c.detail}</span>}
                   {c.hotkey && <kbd>{c.hotkey}</kbd>}
                 </button>
               </div>

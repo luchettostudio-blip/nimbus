@@ -33,6 +33,8 @@ export interface ImapCredentials {
 /** Byte di sorgente scaricati per costruire lo snippet di anteprima. */
 const SNIPPET_SOURCE_BYTES = 12 * 1024
 const SNIPPET_LENGTH = 180
+/** Caratteri di corpo messi nell'indice full-text per ogni mail. */
+const INDEX_TEXT_CHARS = 10_000
 
 /** Header extra scaricati con ogni riepilogo (thread, inbox divisa, disiscrizione). */
 const EXTRA_HEADERS = ['references', 'in-reply-to', 'list-unsubscribe', 'list-unsubscribe-post', 'list-id', 'precedence', 'auto-submitted']
@@ -273,11 +275,14 @@ export class ImapService {
   private async toSummary(folder: string, m: FetchMessageObject): Promise<MessageSummary> {
     const env = m.envelope
     let snippet = ''
+    let bodyText = ''
     if (m.source) {
       try {
         // Il sorgente è troncato: mailparser è tollerante e ci basta il testo iniziale.
+        // Lo stesso testo serve sia per l'anteprima sia per l'indice di ricerca.
         const parsed = await simpleParser(m.source, { skipImageLinks: true, skipTextToHtml: true })
-        snippet = makeSnippet(parsed.text || htmlToText(typeof parsed.html === 'string' ? parsed.html : ''))
+        bodyText = (parsed.text || htmlToText(typeof parsed.html === 'string' ? parsed.html : '')).replace(/\s+/g, ' ').trim()
+        snippet = makeSnippet(bodyText)
       } catch {
         snippet = ''
       }
@@ -298,7 +303,46 @@ export class ImapService {
       hasAttachments: hasAttachmentParts(m.bodyStructure),
       ...headerFields(m.headers),
       inReplyTo: env?.inReplyTo ?? headerFields(m.headers).inReplyTo ?? null,
-      attachmentNames: attachmentNames(m.bodyStructure).join(' ')
+      attachmentNames: attachmentNames(m.bodyStructure).join(' '),
+      bodyText: bodyText.slice(0, INDEX_TEXT_CHARS)
+    }
+  }
+
+  /** Riepiloghi (con testo per l'indice) di UID specifici. */
+  async fetchByUids(path: string, uids: number[]): Promise<MessageSummary[]> {
+    if (uids.length === 0) return []
+    return this.fetchSummaries(path, uids.join(','), true)
+  }
+
+  /** UID dei messaggi arrivati dal giorno indicato (IMAP SEARCH SINCE). */
+  async searchSince(path: string, since: Date): Promise<number[]> {
+    const lock = await this.client.getMailboxLock(path, { readOnly: true })
+    try {
+      if (!this.client.mailbox || this.client.mailbox.exists === 0) return []
+      return ((await this.client.search({ since }, { uid: true })) || []).sort((a, b) => b - a)
+    } finally {
+      lock.release()
+    }
+  }
+
+  /** Ricerca sul server: ogni termine deve comparire in oggetto, mittente, destinatari o corpo. */
+  async searchText(path: string, terms: string[]): Promise<number[]> {
+    if (terms.length === 0) return []
+    const lock = await this.client.getMailboxLock(path, { readOnly: true })
+    try {
+      if (!this.client.mailbox || this.client.mailbox.exists === 0) return []
+      // Un SEARCH per termine (OR fra i campi), poi intersezione: tutti i termini devono esserci.
+      let result: number[] = []
+      for (let i = 0; i < terms.length; i++) {
+        const t = terms[i]
+        const res = (await this.client.search({ or: [{ subject: t }, { from: t }, { to: t }, { body: t }] }, { uid: true })) || []
+        const prev = new Set(result)
+        result = i === 0 ? res : res.filter((u) => prev.has(u))
+        if (result.length === 0) break
+      }
+      return result.sort((a, b) => b - a)
+    } finally {
+      lock.release()
     }
   }
 

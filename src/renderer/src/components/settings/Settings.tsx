@@ -1,13 +1,15 @@
 import { motion } from 'framer-motion'
-import { PenLine, SlidersHorizontal, X, type LucideIcon } from 'lucide-react'
+import { MailX, PenLine, SlidersHorizontal, X, type LucideIcon } from 'lucide-react'
 import { useEffect, type ReactNode } from 'react'
 import { useStore, type SettingsSection } from '../../store'
 import { GeneralSection } from './GeneralSection'
 import { SignaturesSection } from './SignaturesSection'
+import { UnsubscribesSection } from './UnsubscribesSection'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: LucideIcon; render: () => ReactNode }[] = [
   { id: 'general', label: 'Generali', icon: SlidersHorizontal, render: () => <GeneralSection /> },
-  { id: 'signatures', label: 'Firme', icon: PenLine, render: () => <SignaturesSection /> }
+  { id: 'signatures', label: 'Firme', icon: PenLine, render: () => <SignaturesSection /> },
+  { id: 'unsubscribes', label: 'Disiscrizioni', icon: MailX, render: () => <UnsubscribesSection /> }
 ]
 
 /** Finestra Impostazioni (Ctrl+,). Le sezioni si aggiungono in SECTIONS. */

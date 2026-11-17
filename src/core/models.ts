@@ -137,6 +137,19 @@ export interface MessageSummary {
   category?: InboxCategory | null
   /** Se la mail è tornata da uno snooze: quando (per l'etichetta "Rimandata"). */
   wokeAt?: number | null
+
+  // ── conversazione (presenti quando la lista è raggruppata in thread) ──
+  /** Messaggi nella conversazione (tutte le cartelle, incluse le mie risposte). */
+  threadCount?: number
+  threadUnread?: number
+  /** Nomi dei partecipanti (io = "Io"). */
+  participants?: string[]
+
+  // ── transitori (non salvati in `messages`) ──
+  /** Testo del corpo (primi KB) da indicizzare per la ricerca. */
+  bodyText?: string
+  /** Risultato di ricerca: frammenti con le parole trovate tra \u0002 … \u0003. */
+  highlight?: { subject?: string; snippet?: string }
 }
 
 export interface AttachmentInfo {
@@ -293,6 +306,39 @@ export interface SnoozeItem {
   createdAt: number
 }
 
+/** Disiscrizione effettuata (Impostazioni > Disiscrizioni). */
+export interface Unsubscription {
+  id: string
+  accountId: string
+  address: string
+  name: string | null
+  method: 'one-click' | 'mailto' | 'browser'
+  createdAt: number
+  blocked: boolean
+  /** Ha scritto ancora 7+ giorni dopo la disiscrizione. */
+  stillSending: boolean
+}
+
+/** Mittente con List-Unsubscribe ("Gestisci iscrizioni"). */
+export interface Subscription {
+  accountId: string
+  address: string
+  name: string | null
+  perMonth: number
+  total: number
+  lastAt: number
+  unsubscribed: boolean
+  blocked: boolean
+  method: 'one-click' | 'mailto' | 'browser' | null
+}
+
+/** Stato dell'indicizzazione per la ricerca. */
+export interface IndexStatus {
+  running: boolean
+  done: number
+  total: number
+}
+
 /** Eventi emessi dal motore di sync verso la UI. */
 export type SyncEvent =
   | { type: 'folders'; accountId: string }
@@ -304,4 +350,7 @@ export type SyncEvent =
   | { type: 'outbox-failed'; id: string; kind: OutboxKind; error: string }
   | { type: 'outbox-missed'; count: number }
   | { type: 'snooze' }
+  | ({ type: 'index-progress' } & IndexStatus)
+  | { type: 'unsubscriptions' }
+  | { type: 'unsub-still-sending'; id: string; accountId: string; address: string; name: string | null }
   | { type: 'snooze-woke'; accountId: string; folder: string; uid: number; subject: string; from: Address | null }

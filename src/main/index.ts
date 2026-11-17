@@ -7,9 +7,10 @@ import { SyncEngine } from '../core/sync/SyncEngine'
 import type { ThemeMode } from '../shared/ipc'
 import { SafeCredentialStore } from './credentials'
 import { registerIpc } from './ipc'
-import { notifyMissedSends, notifyNewMail, notifySendFailed, notifySnoozeWoke } from './notifications'
+import { notifyMissedSends, notifyNewMail, notifySendFailed, notifySnoozeWoke, notifyStillSending } from './notifications'
 import { AppTray, applyLaunchAtLogin, startedHidden } from './tray'
 import { nativeImageProcessor } from './platform/images'
+import { postOneClick } from './platform/download'
 
 let mainWindow: BrowserWindow | null = null
 /** true quando l'utente ha scelto davvero di uscire (non solo di chiudere la finestra). */
@@ -135,7 +136,12 @@ if (!app.requestSingleInstanceLock()) {
 
     const dataDir = app.getPath('userData')
     store = new MailStore(join(dataDir, 'mail.db'))
-    engine = new SyncEngine(store, new SafeCredentialStore(join(dataDir, 'credentials.json')), { images: nativeImageProcessor, dataDir })
+    engine = new SyncEngine(store, new SafeCredentialStore(join(dataDir, 'credentials.json')), {
+      images: nativeImageProcessor,
+      dataDir,
+      postOneClick,
+      openExternal: (url) => shell.openExternal(url)
+    })
 
     nativeTheme.themeSource = store.getSetting<ThemeMode>('theme', 'system')
     nativeTheme.on('updated', () => {
@@ -162,9 +168,15 @@ if (!app.requestSingleInstanceLock()) {
 
     engine.onEvent((e) => {
       mainWindow?.webContents.send('sync:event', e)
-      if (e.type === 'new-mail') notifyNewMail(e, mainWindow)
+      if (e.type === 'new-mail') {
+        // Di default le notifiche di Windows arrivano solo per la scheda Persone.
+        const st = s.getSettings()
+        const msgs = st.splitInbox && st.notifyOnlyPeople ? e.messages.filter((m) => (m.category ?? 'people') === 'people') : e.messages
+        if (msgs.length) notifyNewMail({ ...e, messages: msgs }, mainWindow)
+      }
       if (e.type === 'outbox') tray.refresh()
       if (e.type === 'snooze-woke') notifySnoozeWoke(e, () => showWindow())
+      if (e.type === 'unsub-still-sending') notifyStillSending(e.name || e.address, () => showWindow())
       if (e.type === 'outbox-missed') notifyMissedSends(e.count, () => showWindow({ view: 'scheduled' }))
       if (e.type === 'outbox-failed' && e.kind === 'scheduled') notifySendFailed(e.error, () => showWindow({ view: 'scheduled' }))
     })

@@ -29,6 +29,40 @@ export function GeneralSection() {
         </Row>
       </Group>
 
+      <Group title="Posta">
+        <Row label="Conversazioni in thread" hint="Raggruppa le risposte (anche le tue) in un'unica conversazione in stile chat.">
+          <Toggle checked={settings.threads} onChange={(v) => update({ threads: v })} />
+        </Row>
+        <Row label="Posta in arrivo divisa" hint="Schede Persone, Newsletter e Notifiche (tasti 1, 2, 3). Niente viene spostato sul server.">
+          <Toggle checked={settings.splitInbox} onChange={(v) => update({ splitInbox: v })} />
+        </Row>
+        <Row label="Notifiche solo per Persone" hint="Le notifiche di Windows arrivano solo per le mail della scheda Persone.">
+          <Toggle checked={settings.notifyOnlyPeople} onChange={(v) => update({ notifyOnlyPeople: v })} />
+        </Row>
+      </Group>
+
+      <Group title="Ricerca">
+        <Row label="Mail da indicizzare" hint="Nimbus scarica in background il testo delle mail di questo periodo per la ricerca istantanea.">
+          <select
+            value={settings.indexMonths}
+            onChange={(e) => update({ indexMonths: Number(e.target.value) })}
+            className="h-8 rounded-lg border border-line bg-surface-2 px-2 text-[12.5px] outline-none"
+          >
+            {[
+              [3, 'Ultimi 3 mesi'],
+              [6, 'Ultimi 6 mesi'],
+              [12, 'Ultimi 12 mesi'],
+              [24, 'Ultimi 2 anni'],
+              [60, 'Ultimi 5 anni']
+            ].map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </Row>
+      </Group>
+
       <Group title="Finestra e avvio">
         <Row label="Chiudi nella barra delle applicazioni" hint="Chiudendo la finestra Nimbus resta attivo nella tray: sync e invii programmati continuano.">
           <Toggle checked={settings.closeToTray} onChange={(v) => update({ closeToTray: v })} />
