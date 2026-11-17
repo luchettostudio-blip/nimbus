@@ -1,0 +1,134 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/*
+ * I colori NON sono qui: arrivano da brand/brand.json (dark + light) e vengono
+ * iniettati come variabili CSS all'avvio da lib/theme.ts. Dark di default,
+ * light quando Windows (o la preferenza dell'app) usa il tema chiaro.
+ */
+:root {
+  --bg: transparent;
+}
+
+@theme inline {
+  --font-sans: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --color-surface: var(--surface);
+  --color-surface-solid: var(--surface-solid);
+  --color-surface-2: var(--surface-2);
+  --color-elevated: var(--elevated);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-danger: var(--danger);
+  --color-overlay: var(--overlay);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  /* Trasparente: lascia vedere il materiale Mica di Windows 11. */
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.selectable {
+  user-select: text;
+}
+
+/* Anteprima PDF (pdf.js): pagine centrate e livello di testo trasparente per selezione e ricerca. */
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 24px;
+}
+.pdf-page {
+  position: relative;
+  flex-shrink: 0;
+  background: #fff;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+.pdf-page canvas {
+  display: block;
+}
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-align: initial;
+  user-select: text;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 0;
+}
+.textLayer span,
+.textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer span.pdf-hit {
+  background: rgba(255, 196, 0, 0.45);
+  border-radius: 2px;
+}
+.textLayer span.pdf-hit-active {
+  background: rgba(255, 120, 0, 0.7);
+}
+
+/* Scrollbar sottili e discrete */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+kbd {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+input,
+textarea {
+  font-family: inherit;
+}

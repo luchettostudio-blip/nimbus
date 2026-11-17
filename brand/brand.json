@@ -1,0 +1,42 @@
+{
+  "name": "Nimbus",
+  "appId": "com.nimbus.mail",
+  "description": "Client email minimale per Windows",
+  "logo": "logo.svg",
+  "icon": "icon.ico",
+  "iconPng": "icon.png",
+  "colors": {
+    "dark": {
+      "surface": "rgba(24, 24, 27, 0.72)",
+      "surfaceSolid": "#18181b",
+      "surface2": "rgba(255, 255, 255, 0.04)",
+      "elevated": "#232327",
+      "line": "rgba(255, 255, 255, 0.07)",
+      "fg": "#ececee",
+      "muted": "#8d8d94",
+      "faint": "#5e5e66",
+      "hover": "rgba(255, 255, 255, 0.045)",
+      "selected": "rgba(124, 140, 255, 0.16)",
+      "accent": "#8b97ff",
+      "accentStrong": "#6d7bff",
+      "danger": "#ff6b6b",
+      "overlay": "rgba(0, 0, 0, 0.45)"
+    },
+    "light": {
+      "surface": "rgba(255, 255, 255, 0.78)",
+      "surfaceSolid": "#f3f3f5",
+      "surface2": "rgba(0, 0, 0, 0.03)",
+      "elevated": "#ffffff",
+      "line": "rgba(0, 0, 0, 0.08)",
+      "fg": "#1b1b1f",
+      "muted": "#6b6b73",
+      "faint": "#a0a0a8",
+      "hover": "rgba(0, 0, 0, 0.04)",
+      "selected": "rgba(91, 108, 255, 0.12)",
+      "accent": "#5b6cff",
+      "accentStrong": "#4a5af0",
+      "danger": "#e5484d",
+      "overlay": "rgba(0, 0, 0, 0.2)"
+    }
+  }
+}
